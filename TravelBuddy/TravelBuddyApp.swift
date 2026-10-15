@@ -30,6 +30,10 @@ struct TravelBuddyApp: App {
     private var menuContent: some View {
         Text(monitor.travelTimeLine)
 
+        if let causeLine = monitor.delayCauseLine {
+            Text(causeLine)
+        }
+
         if let baselineLine = monitor.baselineLine {
             Text(baselineLine)
         }

@@ -16,18 +16,29 @@ final class TravelTimeMonitor: NSObject, ObservableObject {
     @Published private(set) var lastMeasurementDate: Date?
     @Published private(set) var lastError: String?
     @Published private(set) var lastSampleIgnored = false
+    @Published private(set) var delayCause: String?
 
     private let preferences: AppPreferences
     private let sampleStore: SampleStore
+    private let trafficInfo: TrafficInfoService
     private var delayState = DelayStateMachine()
+    /// Snelste route van de laatste meting, om meldingen aan te koppelen.
+    private var lastRoute: [CLLocationCoordinate2D] = []
+    /// Voorkomt dat een trage, verouderde opzoeking een nieuwere overschrijft.
+    private var causeLookupID = 0
     private let locationManager = CLLocationManager()
     private var tickTimer: Timer?
     private var lastAttemptDate: Date?
     private var waitingForLocation = false
 
-    init(preferences: AppPreferences, sampleStore: SampleStore = SampleStore()) {
+    init(
+        preferences: AppPreferences,
+        sampleStore: SampleStore = SampleStore(),
+        trafficInfo: TrafficInfoService = TrafficInfoService()
+    ) {
         self.preferences = preferences
         self.sampleStore = sampleStore
+        self.trafficInfo = trafficInfo
         super.init()
 
         locationManager.delegate = self
@@ -103,6 +114,11 @@ final class TravelTimeMonitor: NSObject, ObservableObject {
         preferences.destinationName.map { "Bestemming: \($0)" }
     }
 
+    var delayCauseLine: String? {
+        guard isDelayed else { return nil }
+        return "Oorzaak: \(delayCause ?? "verkeersinformatie ophalen…")"
+    }
+
     var lastMeasurementLine: String? {
         lastMeasurementDate.map { "Laatste meting: \(Self.timeFormatter.string(from: $0))" }
     }
@@ -152,6 +168,8 @@ final class TravelTimeMonitor: NSObject, ObservableObject {
         lastMeasurementDate = nil
         lastAttemptDate = nil
         lastSampleIgnored = false
+        lastRoute = []
+        clearDelayCause()
         measureNow()
     }
 
@@ -198,8 +216,9 @@ final class TravelTimeMonitor: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 // Snelste route: dat is ook wat je in de auto zou kiezen.
-                if let seconds = response?.routes.map(\.expectedTravelTime).min() {
-                    self.record(travelSeconds: seconds)
+                if let fastest = response?.routes.min(by: { $0.expectedTravelTime < $1.expectedTravelTime }) {
+                    self.lastRoute = fastest.polyline.coordinates
+                    self.record(travelSeconds: fastest.expectedTravelTime)
                 } else {
                     self.finishMeasurement(error: "Route berekenen mislukt: \(error?.localizedDescription ?? "onbekende fout")")
                 }
@@ -241,11 +260,18 @@ final class TravelTimeMonitor: NSObject, ObservableObject {
         )
         switch transition {
         case .began:
-            postDelayBeganNotification()
+            // De notificatie wacht op de oorzaak, zodat die er meteen in staat.
+            lookUpDelayCause { [weak self] in self?.postDelayBeganNotification() }
         case .ended:
+            clearDelayCause()
             postDelayEndedNotification()
         case .none:
-            break
+            if isDelayed {
+                // Tijdens een vertraging kan er alsnog een melding verschijnen.
+                lookUpDelayCause()
+            } else {
+                clearDelayCause()
+            }
         }
 
         lastError = nil
@@ -260,6 +286,30 @@ final class TravelTimeMonitor: NSObject, ObservableObject {
 
     private func handleDestinationChanged() {
         resetHistory()
+    }
+
+    // MARK: - Verkeersinformatie
+
+    private func lookUpDelayCause(then completion: (() -> Void)? = nil) {
+        causeLookupID += 1
+        let lookupID = causeLookupID
+        trafficInfo.lookUpCause(along: lastRoute) { [weak self] cause in
+            guard let self else { return }
+            if lookupID == self.causeLookupID {
+                // Niet op te halen: een eerder gevonden oorzaak laten staan.
+                self.delayCause = cause ?? self.delayCause ?? "verkeersinformatie niet beschikbaar"
+            }
+            // Ook bij een ingehaalde opzoeking (bijv. "Ververs nu" tussendoor)
+            // moet de beginmelding nog komen, zolang de vertraging loopt.
+            if self.isDelayed {
+                completion?()
+            }
+        }
+    }
+
+    private func clearDelayCause() {
+        causeLookupID += 1
+        delayCause = nil
     }
 
     // MARK: - Notificaties
@@ -277,6 +327,9 @@ final class TravelTimeMonitor: NSObject, ObservableObject {
         var body = "Reistijd is nu \(Self.formatMinutes(lastTravelSeconds ?? 0)) (+\(delayMinutes) min)."
         if let baseline = baselineSeconds {
             body += " Normaal: \(Self.formatMinutes(baseline))."
+        }
+        if let cause = delayCause {
+            body += "\nOorzaak: \(cause)."
         }
         content.body = body
         content.sound = .default

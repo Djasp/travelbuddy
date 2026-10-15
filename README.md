@@ -10,6 +10,7 @@ TravelBuddy is een kleine menubalk-app voor macOS die periodiek de reistijd met 
 - Bouwt een referentie op: de **mediaan** van de metingen van de afgelopen 14 dagen (minimaal 5 metingen). De mediaan is robuuster dan het gemiddelde: één zware file trekt de referentie niet omhoog.
 - Wordt de reistijd langer dan de referentie, dan is dat direct zichtbaar in de menubalk: `32m +9` (en een waarschuwingsicoon zodra de drempel is bereikt).
 - Bij een vertraging **gelijk aan of groter dan** de instelbare drempel (standaard 10 min) krijg je één notificatie; zodra de vertraging weer onder de drempel zakt volgt een "vertraging voorbij"-notificatie.
+- Bij zo'n vertraging zoekt de app de **oorzaak** op in de open verkeersdata van NDW, bijv. `Oorzaak: Ongeval bij Zeelandbrug, Zierikzee (sinds 13:05)`. Die staat in de notificatie en in het menu.
 
 ## Vereisten
 
@@ -60,6 +61,14 @@ De eerste meting volgt direct; daarna wordt op interval gemeten. Na 5 metingen i
 - Vertraging = actuele reistijd − mediaan (afgerond op hele minuten, nooit negatief).
 - Notificaties komen alleen op de **overgangen**: één bij het bereiken van de drempel, één bij het zakken eronder.
 - Bij het wijzigen van de bestemming (>250 m verschil) wordt de geschiedenis automatisch gereset; dat kan ook handmatig via Instellingen.
+
+## Hoe de oorzaak wordt gezocht
+
+- Bron: `https://opendata.ndw.nu/actueel_beeld.xml.gz` (NDW, DATEX II, gratis en zonder key). Dit is een momentopname: opgeloste incidenten verdwijnen eruit. De app haalt de feed daarom op zodra de drempel wordt bereikt, en daarna bij elke meting zolang de vertraging duurt.
+- Alleen meldingen binnen 300 m van de snelste route (de lijn van Apple Kaarten) tellen mee, en alleen voor jouw rijrichting.
+- Geplande zaken (wegwerkzaamheden, brugopeningen) tellen alleen mee als ze in het afgelopen uur zijn begonnen; langer lopende werkzaamheden zitten al in de mediaan.
+- NDW levert geen wegnaam, alleen coördinaten. De plaats wordt via Apple's geocoder opgezocht.
+- Geen melding op de route: `Geen verkeersmelding op je route (waarschijnlijk drukte)`. NDW dekt vooral snel- en provinciale wegen.
 
 ## Probleemoplossing
 
